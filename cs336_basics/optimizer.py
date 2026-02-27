@@ -1,5 +1,6 @@
 import torch
 from torch.optim import Optimizer
+import math
 
 class AdamW(Optimizer):
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
@@ -55,3 +56,25 @@ class AdamW(Optimizer):
                     p.add_(p, alpha=-group['lr'] * group['weight_decay'])
 
         return loss
+
+def get_lr_cosine_schedule(
+it: int,
+max_learning_rate: float,
+min_learning_rate: float,
+warmup_iters: int,
+cosine_cycle_iters: int,
+) -> float:
+# 1. Linear warmup phase
+    if it < warmup_iters:
+        return max_learning_rate * it / warmup_iters
+    
+    # 2. Minimum LR phase (after cosine cycle ends)
+    if it > cosine_cycle_iters:
+        return min_learning_rate
+    
+    # 3. Cosine decay phase
+    # Progress through the decay part of the cycle
+    decay_ratio = (it - warmup_iters) / (cosine_cycle_iters - warmup_iters)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    
+    return min_learning_rate + coeff * (max_learning_rate - min_learning_rate)

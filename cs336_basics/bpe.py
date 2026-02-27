@@ -1,10 +1,10 @@
 from abc import ABC
 from dataclasses import dataclass
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 import regex
 
 class Tokenizer(ABC):
-    """Abstract interface for a tokenizer."""
     def encode(self, string: str) -> list[int]:
         raise NotImplementedError
     def decode(self, indices: list[int]) -> str:
@@ -12,109 +12,93 @@ class Tokenizer(ABC):
 
 @dataclass(frozen=True)
 class BPETokenizerParams:
-    """All you need to specify a BPETokenizer."""
-    vocab: dict[int, bytes]     # index -> bytes
-    merges: dict[tuple[int, int], int]  # index1,index2 -> new_index
-    
+    vocab: dict[int, bytes]
+    merges: dict[tuple[int, int], int]
 
 class BPETokenizer(Tokenizer):
-    """BPE tokenizer given a set of merges and a vocabulary."""
-    def __init__(self, params: BPETokenizerParams):
+    def __init__(self, params: BPETokenizerParams, special_tokens: list[str] | None = None):
         self.params = params
+        self.special_tokens = special_tokens or []
+        # Create inverse vocab for efficient ID lookup
+        self.vocab_inverse = {v: k for k, v in self.params.vocab.items()}
+        
+        if self.special_tokens:
+            # Sort by length descending to match longest possible special token first
+            sorted_specials = sorted(self.special_tokens, key=len, reverse=True)
+            self.special_pattern = regex.compile("|".join(map(regex.escape, sorted_specials)))
+        else:
+            self.special_pattern = None
+
+    def decode(self, indices: list[int]) -> str:
+        # Concatenate bytes first to handle multi-byte UTF-8 sequences
+        raw_bytes = b"".join(self.params.vocab[idx] for idx in indices)
+        return raw_bytes.decode("utf-8", errors="replace")
+
+    def encode_iterable(self, iterable: Iterable[str]) -> list[int]:
+        all_ids = []
+        for string in iterable:
+            all_ids.extend(self.encode(string))
+        return all_ids
 
     def encode(self, string: str) -> list[int]:
-        # String -> list of bytes -> list of indices
-        indices = list(map(int, string.encode("utf-8")))  
+        if not self.special_pattern:
+            return self._encode_chunk(string)
         
-        # Merge indices according to merges. Each merge replaces a pair of indices with a new index.
-        # Note: this is a very slow implementation
-        for pair, new_index in self.params.merges.items():  
-            indices = merge(indices, pair, new_index)
-        return indices
-    
-    def decode(self, indices: list[int]) -> str:
-        # List of indices -> list of bytes -> string
-        bytes_list = list(map(self.params.vocab.get, indices))  
-        string = b"".join(bytes_list).decode("utf-8") 
-        return string
-
-def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int]:  
-    """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
-    new_indices = []  
-    i = 0 
-    while i < len(indices):
-        if i + 1 < len(indices) and indices[i] == pair[0] and indices[i + 1] == pair[1]:
-            new_indices.append(new_index)
-            i += 2
-        else:
-            new_indices.append(indices[i])
-            i += 1
-    return new_indices
-
-def bpe_tokenizer():
-    """
-    Byte Pair Encoding (BPE)
-    The BPE algorithm was introduced by Philip Gage in 1994 for data compression.
-    It was adapted to NLP for neural machine translation.  [Sennrich+ 2015]
-    (Previously, papers had been using word-based tokenization.)
-    BPE was then used by GPT-2.  [Radford+ 2019]
-    Basic idea: train the tokenizer on raw text to automatically determine the vocabulary.
-    Intuition: common sequences of characters are represented by a single token, rare sequences are represented by many tokens.
-    The GPT-2 paper used word-based tokenization to break up the text into inital segments and run the original BPE algorithm on each segment.
-
-    Sketch: start with each byte as a token, and successively merge the most common pair of adjacent tokens.
-    """
-
-    # Training the tokenizer
-    string = "the cat in the hat"
-    params = train_bpe(string, num_merges=3)
-
-    # Using the tokenizer
-    tokenizer = BPETokenizer(params)
-    string = "the quick brown fox"  
-    indices = tokenizer.encode(string)  
-    reconstructed_string = tokenizer.decode(indices)  
-    assert string == reconstructed_string
-
-    """
-    In Assignment 1, you will go beyond this in the following ways:  
-    encode() currently loops over all merges. Only loop over merges that matter.
-    Detect and preserve special tokens (e.g., <|endoftext|>).
-    Use pre-tokenization (e.g., the GPT-2 tokenizer regex).
-    Try to make the implementation as fast as possible.
-    """
-
-'''def train_bpe(string: str, num_merges: int) -> BPETokenizerParams:  
-    # Start with the list of bytes of string.
-    indices = list(map(int, string.encode("utf-8")))  
-    merges: dict[tuple[int, int], int] = {}  
-    vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}  # Note the difference between bytes(x) and bytes([x])!
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    for i in range(num_merges):
-        # Count the number of occurrences of each pair of tokens
-        counts = defaultdict(int)
-        for index1, index2 in zip(indices, indices[1:]):  
-            counts[(index1, index2)] += 1 
+        # Split string by special tokens while preserving them
+        parts = self.special_pattern.split(string)
+        specials = self.special_pattern.findall(string)
         
-        # Find the most common pair.
-        pair = max(counts, key=counts.get) 
-        index1, index2 = pair
+        # Map special token strings to their corresponding IDs
+        special_to_id = {v.decode("utf-8"): k for k, v in self.params.vocab.items() 
+                         if v.decode("utf-8", errors="ignore") in self.special_tokens}
         
-        # Merge that pair.
-        new_index = 256 + i 
-        merges[pair] = new_index  
-        vocab[new_index] = vocab[index1] + vocab[index2]
-        indices = merge(indices, pair, new_index)
-    
-    return BPETokenizerParams(vocab=vocab, merges=merges)'''
+        result = []
+        for i in range(len(parts)):
+            if parts[i]:
+                result.extend(self._encode_chunk(parts[i]))
+            if i < len(specials):
+                result.append(special_to_id[specials[i]])
+        return result
 
-from collections import Counter, defaultdict
-
-# GPT-2 pre-tokenization regex pattern
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    def _encode_chunk(self, string: str) -> list[int]:
+        # GPT-2 pre-tokenization regex pattern
+        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+        tokens = regex.findall(PAT, string)
+        
+        final_ids = []
+        for token in tokens:
+            ids = [self.vocab_inverse[bytes([b])] for b in token.encode("utf-8")]
+            while len(ids) >= 2:
+                stats = []
+                for i in range(len(ids) - 1):
+                    pair = (ids[i], ids[i+1])
+                    if pair in self.params.merges:
+                        # Rank based on order in the merge dictionary
+                        rank = list(self.params.merges.keys()).index(pair)
+                        stats.append((rank, i, pair))
+                
+                if not stats:
+                    break
+                
+                # Prioritize merge with the lowest rank
+                best_rank, _, best_pair = min(stats)
+                new_id = self.params.merges[best_pair]
+                
+                new_ids = []
+                i = 0
+                while i < len(ids):
+                    if i < len(ids) - 1 and (ids[i], ids[i+1]) == best_pair:
+                        new_ids.append(new_id)
+                        i += 2
+                    else:
+                        new_ids.append(ids[i])
+                        i += 1
+                ids = new_ids
+            final_ids.extend(ids)
+        return final_ids
 
 def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
-    # 1. Initialize
+    # 1. Initialize vocab with individual bytes and special tokens
     vocab = {i: bytes([i]) for i in range(256)}
     for i, token in enumerate(special_tokens):
         vocab[256 + i] = token.encode("utf-8")
@@ -123,44 +107,51 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
     num_merges = vocab_size - current_vocab_size
     merges = []
 
-    # 2. Pre-tokenize
+    # Use utf-8 for Windows compatibility
     with open(input_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
-    # Split by special tokens and apply regex
+    # 2. Treat special tokens as atomic and isolate regex segments
     special_pattern = "|".join(map(regex.escape, special_tokens)) if special_tokens else ""
-    fragments = regex.split(f"({special_pattern})", text) if special_tokens else [text]
+    fragments = regex.split(f"({special_pattern})", text) if special_pattern else [text]
     
+    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    
+    # word_counts stores: tuple of bytes -> frequency
     word_counts = Counter()
     for frag in fragments:
         if frag and frag not in (special_tokens or []):
             words = regex.findall(PAT, frag)
             for word in words:
-                word_counts[tuple(word.encode("utf-8"))] += 1
+                # Store word as a tuple of single-byte objects
+                word_counts[tuple(bytes([b]) for b in word.encode("utf-8"))] += 1
 
-    # 3. Merging (Optimized for speed)
+    # 3. Merging Loop
     for _ in range(num_merges):
-        pair_counts = defaultdict(int)
+        pair_freqs = defaultdict(int)
         for word_tuple, count in word_counts.items():
             for i in range(len(word_tuple) - 1):
-                pair_counts[word_tuple[i:i+2]] += count
+                pair_freqs[word_tuple[i:i+2]] += count
         
-        if not pair_counts: break
+        if not pair_freqs:
+            break
 
-        # CORRECT TIE-BREAKING: Max frequency, then lexicographically greater pair
-        best_pair = max(pair_counts.keys(), key=lambda p: (pair_counts[p], p))
+        # LEXICOGRAPHICAL TIE-BREAKING: Max frequency, then max lexicographical bytes
+        best_pair = max(pair_freqs.keys(), key=lambda p: (pair_freqs[p], p))
         
-        merges.append((vocab[best_pair[0]], vocab[best_pair[1]]))
-        vocab[current_vocab_size] = vocab[best_pair[0]] + vocab[best_pair[1]]
+        # Record merge using bytes
+        merges.append(best_pair)
+        new_token = best_pair[0] + best_pair[1]
+        vocab[current_vocab_size] = new_token
 
-        # Update word counts efficiently
+        # Efficiently update word counts with the new merged byte sequence
         new_word_counts = Counter()
         for word_tuple, count in word_counts.items():
             new_word = []
             i = 0
             while i < len(word_tuple):
                 if i < len(word_tuple) - 1 and word_tuple[i:i+2] == best_pair:
-                    new_word.append(current_vocab_size)
+                    new_word.append(new_token)
                     i += 2
                 else:
                     new_word.append(word_tuple[i])
@@ -170,9 +161,3 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
         current_vocab_size += 1
 
     return vocab, merges
-
-
-#bpe_tokenizer()
-if __name__ == "__main__":
-    # Your local testing code here
-    pass
