@@ -1,6 +1,7 @@
 from abc import ABC
 from dataclasses import dataclass
 from collections import defaultdict
+import regex
 
 class Tokenizer(ABC):
     """Abstract interface for a tokenizer."""
@@ -83,7 +84,7 @@ def bpe_tokenizer():
     Try to make the implementation as fast as possible.
     """
 
-def train_bpe(string: str, num_merges: int) -> BPETokenizerParams:  
+'''def train_bpe(string: str, num_merges: int) -> BPETokenizerParams:  
     # Start with the list of bytes of string.
     indices = list(map(int, string.encode("utf-8")))  
     merges: dict[tuple[int, int], int] = {}  
@@ -105,7 +106,73 @@ def train_bpe(string: str, num_merges: int) -> BPETokenizerParams:
         vocab[new_index] = vocab[index1] + vocab[index2]
         indices = merge(indices, pair, new_index)
     
-    return BPETokenizerParams(vocab=vocab, merges=merges)
+    return BPETokenizerParams(vocab=vocab, merges=merges)'''
+
+from collections import Counter, defaultdict
+
+# GPT-2 pre-tokenization regex pattern
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
+    # 1. Initialize
+    vocab = {i: bytes([i]) for i in range(256)}
+    for i, token in enumerate(special_tokens):
+        vocab[256 + i] = token.encode("utf-8")
+    
+    current_vocab_size = 256 + len(special_tokens)
+    num_merges = vocab_size - current_vocab_size
+    merges = []
+
+    # 2. Pre-tokenize
+    with open(input_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+
+    # Split by special tokens and apply regex
+    special_pattern = "|".join(map(regex.escape, special_tokens)) if special_tokens else ""
+    fragments = regex.split(f"({special_pattern})", text) if special_tokens else [text]
+    
+    word_counts = Counter()
+    for frag in fragments:
+        if frag and frag not in (special_tokens or []):
+            words = regex.findall(PAT, frag)
+            for word in words:
+                word_counts[tuple(word.encode("utf-8"))] += 1
+
+    # 3. Merging (Optimized for speed)
+    for _ in range(num_merges):
+        pair_counts = defaultdict(int)
+        for word_tuple, count in word_counts.items():
+            for i in range(len(word_tuple) - 1):
+                pair_counts[word_tuple[i:i+2]] += count
+        
+        if not pair_counts: break
+
+        # CORRECT TIE-BREAKING: Max frequency, then lexicographically greater pair
+        best_pair = max(pair_counts.keys(), key=lambda p: (pair_counts[p], p))
+        
+        merges.append((vocab[best_pair[0]], vocab[best_pair[1]]))
+        vocab[current_vocab_size] = vocab[best_pair[0]] + vocab[best_pair[1]]
+
+        # Update word counts efficiently
+        new_word_counts = Counter()
+        for word_tuple, count in word_counts.items():
+            new_word = []
+            i = 0
+            while i < len(word_tuple):
+                if i < len(word_tuple) - 1 and word_tuple[i:i+2] == best_pair:
+                    new_word.append(current_vocab_size)
+                    i += 2
+                else:
+                    new_word.append(word_tuple[i])
+                    i += 1
+            new_word_counts[tuple(new_word)] = count
+        word_counts = new_word_counts
+        current_vocab_size += 1
+
+    return vocab, merges
 
 
-bpe_tokenizer()
+#bpe_tokenizer()
+if __name__ == "__main__":
+    # Your local testing code here
+    pass
