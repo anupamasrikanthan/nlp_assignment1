@@ -74,3 +74,8 @@ def clip_gradient_norm(
         clip_coeff = max_l2_norm / (total_norm + 1e-6)
         for g in grads:
             g.detach().mul_(clip_coeff)
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    # SiLU(x) = x * sigmoid(x)
+    return x * torch.sigmoid(x)

@@ -17,38 +17,48 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
-        # Rename self.W to self.weight
         self.weight = nn.Parameter(torch.empty(out_features, in_features, device=device, dtype=dtype))
-        
-        std = (2.0 / (in_features + out_features)) ** 0.5
+        std = (2.0/(in_features+out_features))**0.5
         nn.init.trunc_normal_(self.weight, mean=0.0, std=std, a=-3.0*std, b=3.0*std)
 
     def forward(self, x):
         return torch.einsum("...i, oi -> ...o", x, self.weight)
-
-class RMSNorm(nn.Module):
-    def __init__(self, d_model, eps=1e-5, device=None, dtype=None):
-        super().__init__()
-        self.eps = eps
-        # Rename self.g to self.weight
-        self.weight = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
-
-    def forward(self, x):
-        in_dtype = x.dtype
-        x_f32 = x.to(torch.float32)
-        rms = torch.sqrt(torch.mean(x_f32**2, dim=-1, keepdim=True) + self.eps)
-        output = (x_f32 / rms) * self.weight
-        return output.to(in_dtype)
-
+    
 class Embedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, device=None, dtype=None):
         super().__init__()
-        # Ensure this is named self.weight
         self.weight = nn.Parameter(torch.empty(num_embeddings, embedding_dim, device=device, dtype=dtype))
         nn.init.trunc_normal_(self.weight, mean=0.0, std=1.0, a=-3.0, b=3.0)
 
     def forward(self, token_ids):
         return self.weight[token_ids]
+
+'''class RMSNorm(nn.Module):
+    def __init__(self, d_model, eps=1e-5, device=None, dtype=None):
+        super().__init__()
+        self.eps = eps
+        # Rename self.g to self.weight
+        self.g = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
+
+    def forward(self, x):
+        in_dtype = x.dtype
+        x_f32 = x.to(torch.float32)
+        rms = torch.sqrt(torch.mean(x_f32**2, dim=-1, keepdim=True) + self.eps)
+        output = (x_f32 / rms) * self.g
+        return output.to(in_dtype)'''
+class RMSNorm(nn.Module):
+    def __init__(self, d_model, eps=1e-5, device=None, dtype=None):
+        super().__init__()
+        self.eps = eps
+        # Use 'g' to match the test adapters
+        self.g = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
+
+    def forward(self, x):
+        # RMSNorm formula: x * (1 / RMS(x)) * g
+        rms = torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.eps)
+        return (x / rms) * self.g
+
+
 import math
 
 def scaled_dot_product_attention(

@@ -21,6 +21,7 @@ from cs336_basics.bpe import train_bpe
 from cs336_basics.optimizer import AdamW, get_lr_cosine_schedule
 from cs336_basics.data import get_batch
 from cs336_basics.nn_utils import save_checkpoint, load_checkpoint
+from cs336_basics.nn_utils import silu
 
 
 
@@ -214,7 +215,19 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    attn = CausalMultiHeadSelfAttention(
+    d_model=d_model,
+    num_heads=num_heads,
+    max_seq_len=max_seq_len, # Changed from context_length
+    rope_theta=theta,
+)
+    # Ensure this matches the renamed attribute in Linear (.weight)
+    attn.q_proj.weight.data = q_proj_weight
+    attn.k_proj.weight.data = k_proj_weight
+    attn.v_proj.weight.data = v_proj_weight
+    attn.output_proj.weight.data = o_proj_weight
+    
+    return attn(in_features, pos_ids=token_positions)
 
 
 def run_rope(
@@ -439,6 +452,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
+    return silu(in_features)
     raise NotImplementedError
 
 
