@@ -107,7 +107,6 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
     num_merges = vocab_size - current_vocab_size
     merges = []
 
-    # Use utf-8 for Windows compatibility
     with open(input_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
@@ -117,46 +116,69 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
     
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     
-    # word_counts stores: tuple of bytes -> frequency
     word_counts = Counter()
     for frag in fragments:
         if frag and frag not in (special_tokens or []):
             words = regex.findall(PAT, frag)
             for word in words:
-                # Store word as a tuple of single-byte objects
                 word_counts[tuple(bytes([b]) for b in word.encode("utf-8"))] += 1
 
-    # 3. Merging Loop
+    # 3. Merging Loop (Optimized)
+    # Pre-calculate pair frequencies once
+    pair_freqs = defaultdict(int)
+    for word_tuple, count in word_counts.items():
+        for i in range(len(word_tuple) - 1):
+            pair_freqs[word_tuple[i:i+2]] += count
+
     for _ in range(num_merges):
-        pair_freqs = defaultdict(int)
-        for word_tuple, count in word_counts.items():
-            for i in range(len(word_tuple) - 1):
-                pair_freqs[word_tuple[i:i+2]] += count
-        
-        if not pair_freqs:
+        # Filter out stale pairs that dropped to 0 or below
+        valid_pairs = {k: v for k, v in pair_freqs.items() if v > 0}
+        if not valid_pairs:
             break
 
-        # LEXICOGRAPHICAL TIE-BREAKING: Max frequency, then max lexicographical bytes
-        best_pair = max(pair_freqs.keys(), key=lambda p: (pair_freqs[p], p))
+        best_pair = max(valid_pairs.keys(), key=lambda p: (valid_pairs[p], p))
         
-        # Record merge using bytes
         merges.append(best_pair)
         new_token = best_pair[0] + best_pair[1]
         vocab[current_vocab_size] = new_token
 
-        # Efficiently update word counts with the new merged byte sequence
         new_word_counts = Counter()
         for word_tuple, count in word_counts.items():
-            new_word = []
-            i = 0
-            while i < len(word_tuple):
-                if i < len(word_tuple) - 1 and word_tuple[i:i+2] == best_pair:
-                    new_word.append(new_token)
-                    i += 2
-                else:
-                    new_word.append(word_tuple[i])
-                    i += 1
-            new_word_counts[tuple(new_word)] = count
+            # Only process words that actually contain the pair
+            if best_pair[0] in word_tuple and best_pair[1] in word_tuple:
+                pair_in_word = False
+                for i in range(len(word_tuple) - 1):
+                    if word_tuple[i] == best_pair[0] and word_tuple[i+1] == best_pair[1]:
+                        pair_in_word = True
+                        break
+                
+                if pair_in_word:
+                    # Subtract old pair frequencies
+                    for i in range(len(word_tuple) - 1):
+                        pair_freqs[word_tuple[i:i+2]] -= count
+                        
+                    # Create the new merged word
+                    new_word = []
+                    i = 0
+                    while i < len(word_tuple):
+                        if i < len(word_tuple) - 1 and word_tuple[i] == best_pair[0] and word_tuple[i+1] == best_pair[1]:
+                            new_word.append(new_token)
+                            i += 2
+                        else:
+                            new_word.append(word_tuple[i])
+                            i += 1
+                    
+                    new_word_tuple = tuple(new_word)
+                    new_word_counts[new_word_tuple] = count
+                    
+                    # Add new pair frequencies
+                    for i in range(len(new_word_tuple) - 1):
+                        pair_freqs[new_word_tuple[i:i+2]] += count
+                    continue
+                    
+            # If the pair wasn't in the word, just carry it over unchanged
+            new_word_counts[word_tuple] = count
+
         word_counts = new_word_counts
         current_vocab_size += 1
 
