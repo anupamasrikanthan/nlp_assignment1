@@ -9,10 +9,8 @@ import pickle
 import sys
 from unittest.mock import MagicMock
 
-# Global mock for Unix-only 'resource' module on Windows
 if sys.platform == "win32":
     sys.modules["resource"] = MagicMock()
-
 
 class DEFAULT:
     pass

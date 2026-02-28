@@ -6,19 +6,17 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-
-# Local module imports
 from cs336_basics.model import (
     Linear, RMSNorm, Embedding, scaled_dot_product_attention,
     SwiGLU, CausalMultiHeadSelfAttention, RotaryPositionalEmbedding,
     TransformerBlock, TransformerLM
 )
-from cs336_basics.nn_utils import (
+from cs336_basics.extra_stuff import (
     softmax, cross_entropy, clip_gradient_norm, 
     save_checkpoint, load_checkpoint, silu
 )
 from cs336_basics.optimizer import AdamW, get_lr_cosine_schedule
-from cs336_basics.data import get_batch
+from cs336_basics.extra_stuff import get_batch
 from cs336_basics.bpe import BPETokenizer, train_bpe
 
 
@@ -133,11 +131,8 @@ def run_transformer_block(
 ) -> Float[Tensor, " batch sequence_length d_model"]:
     block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
     block.load_state_dict(weights, strict=False)
-    
-    # Generate the missing pos_ids for RoPE
     batch_size, seq_len, _ = in_features.shape
     pos_ids = torch.arange(seq_len, device=in_features.device).unsqueeze(0).expand(batch_size, -1)
-    
     return block(in_features, pos_ids=pos_ids)
 
 
@@ -152,10 +147,9 @@ def run_transformer_lm(
     weights: dict[str, Tensor],
     in_indices: Int[Tensor, " batch_size sequence_length"],
 ) -> Float[Tensor, " batch_size sequence_length vocab_size"]:
-    model = TransformerLM(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta)
+    model = TransformerLM(vocab_size,context_length,d_model,num_layers,num_heads,d_ff,rope_theta)
     model.load_state_dict(weights)
     return model(in_indices)
-
 
 def run_rmsnorm(
     d_model: int,
@@ -167,34 +161,27 @@ def run_rmsnorm(
     norm.weight.data = weights 
     return norm(in_features)
 
-
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
     return silu(in_features)
-
 
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return get_batch(dataset, batch_size, context_length, device)
-
+    return get_batch(dataset,batch_size,context_length,device)
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
-    return softmax(in_features, dim)
-
+    return softmax(in_features,dim)
 
 def run_cross_entropy(
     inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]
 ) -> Float[Tensor, ""]:
-    return cross_entropy(inputs, targets)
-
+    return cross_entropy(inputs,targets)
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
-    clip_gradient_norm(parameters, max_l2_norm)
-
+    clip_gradient_norm(parameters,max_l2_norm)
 
 def get_adamw_cls() -> Any:
     return AdamW
-
 
 def run_get_lr_cosine_schedule(
     it: int,
@@ -204,9 +191,8 @@ def run_get_lr_cosine_schedule(
     cosine_cycle_iters: int,
 ):
     return get_lr_cosine_schedule(
-        it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters
+        it, max_learning_rate,min_learning_rate,warmup_iters,cosine_cycle_iters
     )
-
 
 def run_save_checkpoint(
     model: torch.nn.Module,
@@ -214,31 +200,26 @@ def run_save_checkpoint(
     iteration: int,
     out: str | os.PathLike | BinaryIO | IO[bytes],
 ):
-    save_checkpoint(model, optimizer, iteration, out)
-
+    save_checkpoint(model,optimizer,iteration,out)
 
 def run_load_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
 ) -> int:
-    return load_checkpoint(model, optimizer, src)
-
+    return load_checkpoint(model,optimizer,src)
 
 def get_tokenizer(
     vocab: dict[int, bytes],
     merges: list[tuple[bytes, bytes]],
     special_tokens: list[str] | None = None,
 ) -> Any:
-    return BPETokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    return BPETokenizer(vocab=vocab,merges=merges,special_tokens=special_tokens)
             
-    
-
-
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
     special_tokens: list[str],
     **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    return train_bpe(input_path, vocab_size, special_tokens)
+    return train_bpe(input_path,vocab_size,special_tokens)
