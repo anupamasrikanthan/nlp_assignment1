@@ -19,7 +19,7 @@ from cs336_basics.nn_utils import (
 )
 from cs336_basics.optimizer import AdamW, get_lr_cosine_schedule
 from cs336_basics.data import get_batch
-from cs336_basics.bpe import BPETokenizer, BPETokenizerParams, train_bpe
+from cs336_basics.bpe import BPETokenizer, train_bpe
 
 
 def run_linear(
@@ -230,15 +230,9 @@ def get_tokenizer(
     merges: list[tuple[bytes, bytes]],
     special_tokens: list[str] | None = None,
 ) -> Any:
-    byte_to_id = {v: k for k, v in vocab.items()}
-    merges_dict = {}
-    for idx, (b1, b2) in enumerate(merges):
-        new_token_bytes = b1 + b2
-        if new_token_bytes in byte_to_id:
-            merges_dict[(byte_to_id[b1], byte_to_id[b2])] = byte_to_id[new_token_bytes]
+    return BPETokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
             
-    params = BPETokenizerParams(vocab=vocab, merges=merges_dict)
-    return BPETokenizer(params, special_tokens=special_tokens)
+    
 
 
 def run_train_bpe(
